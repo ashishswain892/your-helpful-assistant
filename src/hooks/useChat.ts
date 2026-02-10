@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { ChatMessage, ApiConfig, Citation, RetrievedChunk } from "@/types/chat";
+import { supabase } from "@/integrations/supabase/client";
 
 const REFUSAL_TEXT = "This information is not available in the provided document(s).";
 
@@ -18,33 +19,26 @@ export function useChat(config: ApiConfig) {
     setIsLoading(true);
 
     try {
-      const res = await fetch(`${config.baseUrl}/ask`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: input,
-          debug: config.debugMode,
-        }),
+      const { data, error } = await supabase.functions.invoke("ask", {
+        body: { question: input, debug: config.debugMode },
       });
 
-      if (!res.ok) throw new Error(`API error: ${res.status}`);
-
-      const data = await res.json();
+      if (error) throw error;
 
       const isRefusal = data.answer?.trim() === REFUSAL_TEXT;
 
       const citations: Citation[] = (data.citations || []).map((c: any) => ({
-        document: c.document || c.doc_name || "Unknown",
+        document: c.document || "Unknown",
         page: c.page || c.page_number,
         chunkId: c.chunk_id,
         snippet: c.snippet || c.text || "",
       }));
 
       const chunks: RetrievedChunk[] = (data.chunks || data.retrieved_chunks || []).map((c: any, i: number) => ({
-        id: c.id || c.chunk_id || `chunk-${i}`,
+        id: c.id || `chunk-${i}`,
         text: c.text || c.content || "",
-        score: c.score || c.similarity || 0,
-        document: c.document || c.doc_name || "Unknown",
+        score: c.score || 0,
+        document: c.document || "Unknown",
         page: c.page || c.page_number,
       }));
 
@@ -63,7 +57,7 @@ export function useChat(config: ApiConfig) {
       const errorMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: `⚠️ Failed to connect to API at \`${config.baseUrl}\`. Make sure your FastAPI server is running.\n\nError: ${err instanceof Error ? err.message : "Unknown error"}`,
+        content: `⚠️ Error: ${err instanceof Error ? err.message : "Unknown error"}`,
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMsg]);

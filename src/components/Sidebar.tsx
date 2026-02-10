@@ -3,15 +3,16 @@ import {
   Plane,
   Activity,
   Upload,
-  Settings,
   Bug,
   Trash2,
   CheckCircle2,
   XCircle,
   Loader2,
   FileText,
+  BookOpen,
 } from "lucide-react";
 import { ApiConfig, HealthStatus, IngestStatus } from "@/types/chat";
+import { supabase } from "@/integrations/supabase/client";
 
 interface SidebarProps {
   config: ApiConfig;
@@ -22,38 +23,39 @@ interface SidebarProps {
 const Sidebar = ({ config, onConfigChange, onClear }: SidebarProps) => {
   const [health, setHealth] = useState<HealthStatus>({ status: "unknown" });
   const [ingest, setIngest] = useState<IngestStatus>({ status: "idle" });
+  const [showIngestForm, setShowIngestForm] = useState(false);
+  const [docName, setDocName] = useState("");
+  const [docText, setDocText] = useState("");
 
   const checkHealth = async () => {
     setHealth({ status: "checking" });
     try {
-      const res = await fetch(`${config.baseUrl}/health`);
-      if (res.ok) {
-        const data = await res.json();
-        setHealth({ status: "healthy", details: JSON.stringify(data) });
-      } else {
-        setHealth({ status: "unhealthy", details: `Status ${res.status}` });
-      }
+      const { data, error } = await supabase.functions.invoke("health");
+      if (error) throw error;
+      setHealth({ status: "healthy", details: data.status });
     } catch {
-      setHealth({ status: "unhealthy", details: "Cannot reach server" });
+      setHealth({ status: "unhealthy", details: "Cannot reach backend" });
     }
   };
 
   const triggerIngest = async () => {
-    setIngest({ status: "ingesting", message: "Sending ingest request..." });
+    if (!docName.trim() || !docText.trim()) return;
+    setIngest({ status: "ingesting", message: "Processing document..." });
     try {
-      const res = await fetch(`${config.baseUrl}/ingest`, { method: "POST" });
-      if (res.ok) {
-        const data = await res.json();
-        setIngest({
-          status: "done",
-          message: data.message || "Ingestion complete",
-          documentsCount: data.documents_count,
-        });
-      } else {
-        setIngest({ status: "error", message: `Error: ${res.status}` });
-      }
-    } catch {
-      setIngest({ status: "error", message: "Cannot reach server" });
+      const { data, error } = await supabase.functions.invoke("ingest", {
+        body: { document_name: docName.trim(), text: docText.trim() },
+      });
+      if (error) throw error;
+      setIngest({
+        status: "done",
+        message: `${data.chunks_created} chunks created`,
+        documentsCount: data.chunks_created,
+      });
+      setDocName("");
+      setDocText("");
+      setShowIngestForm(false);
+    } catch (e) {
+      setIngest({ status: "error", message: e instanceof Error ? e.message : "Error" });
     }
   };
 
@@ -72,93 +74,80 @@ const Sidebar = ({ config, onConfigChange, onClear }: SidebarProps) => {
           <Plane className="h-5 w-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-sm font-bold tracking-wide text-foreground">
-            AIRMAN RAG
-          </h1>
-          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">
-            Aviation Doc AI
-          </p>
+          <h1 className="text-sm font-bold tracking-wide text-foreground">AIRMAN RAG</h1>
+          <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Aviation Doc AI</p>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-5">
-        {/* API Config */}
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <Settings className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-mono font-medium text-muted-foreground uppercase tracking-wider">
-              API Config
-            </span>
-          </div>
-          <label className="block mb-1.5 text-xs text-muted-foreground">Base URL</label>
-          <input
-            type="text"
-            value={config.baseUrl}
-            onChange={(e) => onConfigChange({ ...config, baseUrl: e.target.value })}
-            className="w-full rounded-md border border-border bg-muted px-3 py-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-          />
-        </section>
-
         {/* Health */}
         <section>
           <div className="flex items-center gap-2 mb-3">
             <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-mono font-medium text-muted-foreground uppercase tracking-wider">
-              Health
-            </span>
+            <span className="text-xs font-mono font-medium text-muted-foreground uppercase tracking-wider">Health</span>
           </div>
           <button
             onClick={checkHealth}
             className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground transition hover:bg-secondary/80"
           >
             {healthIcon[health.status]}
-            <span>
-              {health.status === "unknown"
-                ? "Check Health"
-                : health.status === "checking"
-                ? "Checking..."
-                : health.status === "healthy"
-                ? "Healthy"
-                : "Unhealthy"}
-            </span>
+            <span>{health.status === "unknown" ? "Check Health" : health.status === "checking" ? "Checking..." : health.status === "healthy" ? "Healthy" : "Unhealthy"}</span>
           </button>
-          {health.details && (
-            <p className="mt-1.5 text-[10px] font-mono text-muted-foreground truncate">
-              {health.details}
-            </p>
-          )}
         </section>
 
         {/* Ingest */}
         <section>
           <div className="flex items-center gap-2 mb-3">
             <Upload className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-mono font-medium text-muted-foreground uppercase tracking-wider">
-              Ingestion
-            </span>
+            <span className="text-xs font-mono font-medium text-muted-foreground uppercase tracking-wider">Ingestion</span>
           </div>
-          <button
-            onClick={triggerIngest}
-            disabled={ingest.status === "ingesting"}
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50 glow-primary"
-          >
-            {ingest.status === "ingesting" ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <FileText className="h-3.5 w-3.5" />
-            )}
-            <span>
-              {ingest.status === "ingesting" ? "Ingesting..." : "Trigger Ingest"}
-            </span>
-          </button>
-          {ingest.message && (
-            <p
-              className={`mt-1.5 text-[10px] font-mono ${
-                ingest.status === "error" ? "text-destructive" : "text-success"
-              }`}
+
+          {!showIngestForm ? (
+            <button
+              onClick={() => setShowIngestForm(true)}
+              className="flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition hover:opacity-90 glow-primary"
             >
+              <FileText className="h-3.5 w-3.5" />
+              <span>Add Document</span>
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={docName}
+                onChange={(e) => setDocName(e.target.value)}
+                placeholder="Document name (e.g., PPL Manual)"
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <textarea
+                value={docText}
+                onChange={(e) => setDocText(e.target.value)}
+                placeholder="Paste document text here..."
+                rows={6}
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground resize-none focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={triggerIngest}
+                  disabled={ingest.status === "ingesting" || !docName.trim() || !docText.trim()}
+                  className="flex-1 flex items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                >
+                  {ingest.status === "ingesting" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                  <span>{ingest.status === "ingesting" ? "Ingesting..." : "Ingest"}</span>
+                </button>
+                <button
+                  onClick={() => setShowIngestForm(false)}
+                  className="rounded-md border border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {ingest.message && (
+            <p className={`mt-1.5 text-[10px] font-mono ${ingest.status === "error" ? "text-destructive" : "text-success"}`}>
               {ingest.message}
-              {ingest.documentsCount != null && ` (${ingest.documentsCount} docs)`}
             </p>
           )}
         </section>
@@ -167,9 +156,7 @@ const Sidebar = ({ config, onConfigChange, onClear }: SidebarProps) => {
         <section>
           <div className="flex items-center gap-2 mb-3">
             <Bug className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs font-mono font-medium text-muted-foreground uppercase tracking-wider">
-              Debug Mode
-            </span>
+            <span className="text-xs font-mono font-medium text-muted-foreground uppercase tracking-wider">Debug Mode</span>
           </div>
           <button
             onClick={() => onConfigChange({ ...config, debugMode: !config.debugMode })}
@@ -182,9 +169,21 @@ const Sidebar = ({ config, onConfigChange, onClear }: SidebarProps) => {
             <Bug className="h-3.5 w-3.5" />
             <span>{config.debugMode ? "Debug ON" : "Debug OFF"}</span>
           </button>
-          <p className="mt-1.5 text-[10px] text-muted-foreground">
-            Shows retrieved chunks with similarity scores
-          </p>
+          <p className="mt-1.5 text-[10px] text-muted-foreground">Shows retrieved chunks with scores</p>
+        </section>
+
+        {/* Info */}
+        <section className="rounded-lg border border-border bg-muted/30 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <BookOpen className="h-3.5 w-3.5 text-primary" />
+            <span className="text-xs font-medium text-foreground">How to use</span>
+          </div>
+          <ol className="text-[10px] text-muted-foreground space-y-1 list-decimal list-inside">
+            <li>Check health status</li>
+            <li>Add document text via ingestion</li>
+            <li>Ask questions about the docs</li>
+            <li>Enable debug to see chunks</li>
+          </ol>
         </section>
       </div>
 
