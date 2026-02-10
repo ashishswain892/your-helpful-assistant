@@ -8,7 +8,7 @@ import EmptyState from "@/components/EmptyState";
 
 const Index = () => {
   const [config, setConfig] = useState<ApiConfig>({
-    baseUrl: "http://localhost:8000",
+    baseUrl: "",
     debugMode: false,
   });
 
@@ -24,22 +24,16 @@ const Index = () => {
       <Sidebar config={config} onConfigChange={setConfig} onClear={clearMessages} />
 
       <main className="flex flex-1 flex-col min-w-0">
-        {/* Top bar */}
         <header className="flex items-center justify-between border-b border-border bg-card px-6 py-3">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold text-foreground">Chat</h2>
             {config.debugMode && (
-              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-mono font-medium text-accent">
-                DEBUG
-              </span>
+              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-mono font-medium text-accent">DEBUG</span>
             )}
           </div>
-          <span className="text-[10px] font-mono text-muted-foreground">
-            {messages.length} messages
-          </span>
+          <span className="text-[10px] font-mono text-muted-foreground">{messages.length} messages</span>
         </header>
 
-        {/* Messages */}
         {messages.length === 0 ? (
           <EmptyState />
         ) : (
