@@ -76,25 +76,36 @@ serve(async (req) => {
       page_number: r.page_number,
     }));
 
-    // If no chunks found, refuse
-    if (topChunks.length === 0) {
-      return new Response(
-        JSON.stringify({
-          answer: REFUSAL,
-          citations: [],
-          chunks: [],
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     // Build context for LLM
-    const context = topChunks
-      .map((c, i) => `[Source ${i + 1} - ${c.document}, Page ${c.page_number || "N/A"}]\n${c.text}`)
-      .join("\n\n---\n\n");
+    const hasContext = topChunks.length > 0;
+    const context = hasContext
+      ? topChunks
+          .map((c, i) => `[Source ${i + 1} - ${c.document}, Page ${c.page_number || "N/A"}]\n${c.text}`)
+          .join("\n\n---\n\n")
+      : "";
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+
+    const systemPrompt = hasContext
+      ? `You are AIRMAN, a friendly and knowledgeable aviation assistant. You can chat normally about anything, but you also have access to aviation documents.
+
+For this question, relevant document excerpts were found. Use them to give an accurate, well-cited answer.
+
+RULES FOR DOCUMENT-BASED ANSWERS:
+1. Cite sources like [Source 1], [Source 2] when using document content.
+2. Be precise — aviation safety depends on accuracy.
+3. You may supplement with brief general knowledge if it helps explain, but clearly distinguish what comes from the documents.
+
+Context from aviation documents:
+${context}`
+      : `You are AIRMAN, a friendly and knowledgeable aviation assistant. You can have normal conversations, answer general questions, and chat casually.
+
+You specialize in aviation topics (PPL, CPL, ATPL, flight operations, aerodynamics, meteorology, navigation, regulations, etc.) but you're happy to talk about anything.
+
+If asked about specific documents that haven't been ingested yet, let the user know they can upload documents using the sidebar for document-specific answers with citations.
+
+Be warm, helpful, and conversational.`;
 
     const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -105,23 +116,8 @@ serve(async (req) => {
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
         messages: [
-          {
-            role: "system",
-            content: `You are an aviation document assistant for AIRMAN. You answer questions STRICTLY and ONLY based on the provided context from aviation documents (PPL/CPL/ATPL textbooks, SOPs, manuals).
-
-CRITICAL RULES:
-1. ONLY use information from the provided context to answer questions.
-2. If the answer cannot be fully supported by the provided context, respond EXACTLY with: "${REFUSAL}"
-3. Do NOT add any information from your general knowledge.
-4. Always cite which source(s) you used in your answer (e.g., "[Source 1]").
-5. Be precise and factual. Aviation safety depends on accuracy.
-6. For procedural questions, list steps clearly.
-7. If partially supported, only state what the documents confirm and note what's missing.`,
-          },
-          {
-            role: "user",
-            content: `Context from aviation documents:\n\n${context}\n\n---\n\nQuestion: ${question}`,
-          },
+          { role: "system", content: systemPrompt },
+          { role: "user", content: question },
         ],
       }),
     });
@@ -139,21 +135,22 @@ CRITICAL RULES:
     }
 
     const aiData = await aiResponse.json();
-    const answer = aiData.choices?.[0]?.message?.content || REFUSAL;
-    const isRefusal = answer.trim() === REFUSAL;
+    const answer = aiData.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
 
     // Build citations from chunks referenced in answer
-    const citations = topChunks.slice(0, 3).map(c => ({
-      document: c.document,
-      page: c.page_number,
-      chunk_id: c.id,
-      snippet: c.text.substring(0, 150) + "...",
-    }));
+    const citations = hasContext
+      ? topChunks.slice(0, 3).map(c => ({
+          document: c.document,
+          page: c.page_number,
+          chunk_id: c.id,
+          snippet: c.text.substring(0, 150) + "...",
+        }))
+      : [];
 
     return new Response(
       JSON.stringify({
         answer,
-        citations: isRefusal ? [] : citations,
+        citations,
         chunks: debug ? topChunks : [],
         retrieved_chunks: debug ? topChunks : [],
       }),
