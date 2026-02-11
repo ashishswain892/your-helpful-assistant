@@ -70,16 +70,30 @@ const Sidebar = ({ config, onConfigChange, onClear }: SidebarProps) => {
     try {
       const text = await extractTextFromFile(selectedFile);
       if (!text.trim()) throw new Error("No text could be extracted from the file");
-      setIngest({ status: "ingesting", message: "Uploading to backend..." });
       const docName = selectedFile.name.replace(/\.[^/.]+$/, "");
-      const { data, error } = await supabase.functions.invoke("ingest", {
-        body: { document_name: docName, text },
-      });
-      if (error) throw error;
+
+      // Split into ~40KB batches to avoid edge function memory limits
+      const BATCH_SIZE = 40_000;
+      const batches: string[] = [];
+      for (let i = 0; i < text.length; i += BATCH_SIZE) {
+        batches.push(text.slice(i, i + BATCH_SIZE));
+      }
+
+      let totalChunks = 0;
+      for (let i = 0; i < batches.length; i++) {
+        setIngest({ status: "ingesting", message: `Uploading batch ${i + 1}/${batches.length}...` });
+        const batchName = batches.length > 1 ? `${docName} (part ${i + 1})` : docName;
+        const { data, error } = await supabase.functions.invoke("ingest", {
+          body: { document_name: batchName, text: batches[i] },
+        });
+        if (error) throw error;
+        totalChunks += data.chunks_created || 0;
+      }
+
       setIngest({
         status: "done",
-        message: `${data.chunks_created} chunks from "${docName}"`,
-        documentsCount: data.chunks_created,
+        message: `${totalChunks} chunks from "${docName}"`,
+        documentsCount: totalChunks,
       });
       setSelectedFile(null);
       setShowIngestForm(false);
