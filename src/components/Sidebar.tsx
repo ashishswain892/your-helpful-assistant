@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   Plane,
   Activity,
@@ -10,9 +10,13 @@ import {
   Loader2,
   FileText,
   BookOpen,
+  File,
 } from "lucide-react";
 import { ApiConfig, HealthStatus, IngestStatus } from "@/types/chat";
 import { supabase } from "@/integrations/supabase/client";
+import * as pdfjsLib from "pdfjs-dist";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs`;
 
 interface SidebarProps {
   config: ApiConfig;
@@ -20,12 +24,34 @@ interface SidebarProps {
   onClear: () => void;
 }
 
+async function extractTextFromPDF(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pages: string[] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const text = content.items.map((item: any) => item.str).join(" ");
+    pages.push(`--- Page ${i} ---\n${text}`);
+  }
+  return pages.join("\n\n");
+}
+
+async function extractTextFromFile(file: File): Promise<string> {
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  if (ext === "pdf") {
+    return extractTextFromPDF(file);
+  }
+  // For txt, md, and other text files
+  return file.text();
+}
+
 const Sidebar = ({ config, onConfigChange, onClear }: SidebarProps) => {
   const [health, setHealth] = useState<HealthStatus>({ status: "unknown" });
   const [ingest, setIngest] = useState<IngestStatus>({ status: "idle" });
   const [showIngestForm, setShowIngestForm] = useState(false);
-  const [docName, setDocName] = useState("");
-  const [docText, setDocText] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const checkHealth = async () => {
     setHealth({ status: "checking" });
@@ -39,24 +65,32 @@ const Sidebar = ({ config, onConfigChange, onClear }: SidebarProps) => {
   };
 
   const triggerIngest = async () => {
-    if (!docName.trim() || !docText.trim()) return;
-    setIngest({ status: "ingesting", message: "Processing document..." });
+    if (!selectedFile) return;
+    setIngest({ status: "ingesting", message: "Extracting text from file..." });
     try {
+      const text = await extractTextFromFile(selectedFile);
+      if (!text.trim()) throw new Error("No text could be extracted from the file");
+      setIngest({ status: "ingesting", message: "Uploading to backend..." });
+      const docName = selectedFile.name.replace(/\.[^/.]+$/, "");
       const { data, error } = await supabase.functions.invoke("ingest", {
-        body: { document_name: docName.trim(), text: docText.trim() },
+        body: { document_name: docName, text },
       });
       if (error) throw error;
       setIngest({
         status: "done",
-        message: `${data.chunks_created} chunks created`,
+        message: `${data.chunks_created} chunks from "${docName}"`,
         documentsCount: data.chunks_created,
       });
-      setDocName("");
-      setDocText("");
+      setSelectedFile(null);
       setShowIngestForm(false);
     } catch (e) {
       setIngest({ status: "error", message: e instanceof Error ? e.message : "Error" });
     }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) setSelectedFile(file);
   };
 
   const healthIcon = {
@@ -113,30 +147,35 @@ const Sidebar = ({ config, onConfigChange, onClear }: SidebarProps) => {
           ) : (
             <div className="space-y-2">
               <input
-                type="text"
-                value={docName}
-                onChange={(e) => setDocName(e.target.value)}
-                placeholder="Document name (e.g., PPL Manual)"
-                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.txt,.md,.text"
+                onChange={handleFileSelect}
+                className="hidden"
               />
-              <textarea
-                value={docText}
-                onChange={(e) => setDocText(e.target.value)}
-                placeholder="Paste document text here..."
-                rows={6}
-                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex w-full items-center justify-center gap-2 rounded-md border-2 border-dashed border-border bg-muted/50 px-3 py-4 text-xs text-muted-foreground transition hover:border-primary/50 hover:text-foreground"
+              >
+                <File className="h-4 w-4" />
+                <span>{selectedFile ? selectedFile.name : "Choose PDF, TXT, or MD file"}</span>
+              </button>
+              {selectedFile && (
+                <p className="text-[10px] font-mono text-muted-foreground truncate">
+                  {(selectedFile.size / 1024).toFixed(1)} KB
+                </p>
+              )}
               <div className="flex gap-2">
                 <button
                   onClick={triggerIngest}
-                  disabled={ingest.status === "ingesting" || !docName.trim() || !docText.trim()}
+                  disabled={ingest.status === "ingesting" || !selectedFile}
                   className="flex-1 flex items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-50"
                 >
                   {ingest.status === "ingesting" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
-                  <span>{ingest.status === "ingesting" ? "Ingesting..." : "Ingest"}</span>
+                  <span>{ingest.status === "ingesting" ? "Ingesting..." : "Upload & Ingest"}</span>
                 </button>
                 <button
-                  onClick={() => setShowIngestForm(false)}
+                  onClick={() => { setShowIngestForm(false); setSelectedFile(null); }}
                   className="rounded-md border border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground"
                 >
                   Cancel
